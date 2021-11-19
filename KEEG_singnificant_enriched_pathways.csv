@@ -1,0 +1,5 @@
+"","Description","N","DE","P.DE","FDR","SigGenesInSet","exposure","KEGG_id"
+"1","Inflammatory mediator regulation of TRP channels",97,4,0.000643577834878911,0.154280509808825,"ADCY4,ALOX12,PLA2G4F,PLCG2","Wildfire-related","path:hsa04750"
+"2","Platelet activation",123,4,0.000894379767007679,0.154280509808825,"ADCY4,PLA2G4F,PLCG2,SNAP23","Wildfire-related","path:hsa04611"
+"3","Phospholipase D signaling pathway",144,3,0.0226997512627591,0.783141418565188,"ADCY4,PLA2G4F,PLCG2","Wildfire-related","path:hsa04072"
+"4","Human T-cell leukemia virus 1 infection",214,3,0.0404052057352273,0.849938271851489,"ADCY4,HLA-DQB1,TBPL2","Wildfire-related","path:hsa05166"

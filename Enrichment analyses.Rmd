@@ -1,0 +1,246 @@
+---
+title: "DNAm and Wildfire PM2.5, Enrichment analyses"
+author: "Rongbin Xu"
+date: "27 Oct 2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r,message=FALSE}
+rm(list = ls())
+library(dplyr)
+library(missMethyl)
+```
+
+## Read EWAS and DMR results
+```{r}
+## EWAS results
+EWAS_compare<-readRDS("Wildfire_EWAS_reuslts.rds")  
+exp<-levels(EWAS_compare$exposure)
+sig_CpGs_Bonferi<-EWAS_compare%>%
+  filter(P_bonferroni<0.05)
+
+## DMR results
+over_DMRcate_0.01<-read.csv("DMRcate_overlaps_p0.01_order_by_location.csv")[,-1]
+over_comb_p_0.01<-read.csv("Comb_p_overlaps_p0.01_order_by_location.csv")[,-1]
+```
+
+## GO and KEEG by missMethyl
+```{r}
+## Prepare data for missMethyl
+library(IlluminaHumanMethylation450kanno.ilmn12.hg19)
+library(limma)
+ann <- getAnnotation(IlluminaHumanMethylation450kanno.ilmn12.hg19)
+
+```
+
+### Eenrichment analyses
+Here, I chose inputs as CpGs(Bonferroni P-value<0.05) from EWAS and CpGs overlaped with DMRs by two methods (FDR<0.01).
+```{r}
+CPG_backgroud<-unique(EWAS_compare$probeID)
+
+## Analyses 1
+input1_wildfire<-c(as.character(sig_CpGs_Bonferi$probeID[sig_CpGs_Bonferi$exposure=="Wildfire-related"]),
+          as.character(over_comb_p_0.01$CpG[over_comb_p_0.01$exposure=="Wildfire-related"]),
+          as.character(over_DMRcate_0.01$CpG[over_DMRcate_0.01$exposure=="Wildfire-related"]))%>%
+          paste(collapse = "/")%>%
+          strsplit("/")%>%
+          unlist()%>%
+          unique()
+
+input1_non_wildfire<-c(as.character(sig_CpGs_Bonferi$probeID[sig_CpGs_Bonferi$exposure=="Non-wildfire-related"]),
+          as.character(over_comb_p_0.01$CpG[over_comb_p_0.01$exposure=="Non-wildfire-related"]),
+          as.character(over_DMRcate_0.01$CpG[over_DMRcate_0.01$exposure=="Non-wildfire-related"]))%>%
+          paste(collapse = "/")%>%
+          strsplit("/")%>%
+          unlist()%>%
+          unique()
+
+
+
+output1_GO_wildfire<-gometh(input1_wildfire,collection = "Go",anno = ann,all.cpg = CPG_backgroud,sig.genes = TRUE)%>%
+                     mutate(exposure="Wildfire-related",ID=rownames(.))## about 10 mins
+output1_GO_non_wildfire<-gometh(input1_non_wildfire,collection = "Go",anno = ann,all.cpg = CPG_backgroud,sig.genes = TRUE)%>%
+                         mutate(exposure="Non-wildfire-related",ID=rownames(.))
+
+output1_KEEG_wildfire<-gometh(input1_wildfire,collection = "KEGG",anno = ann,all.cpg = CPG_backgroud,sig.genes = TRUE)%>%
+                       mutate(exposure="Wildfire-related",KEGG_id=rownames(.))
+output1_KEEG_non_wildfire<-gometh(input1_non_wildfire,collection = "KEGG",anno = ann,all.cpg = CPG_backgroud,sig.genes = TRUE)%>%
+                           mutate(exposure="Non-wildfire-related",KEGG_id=rownames(.))
+
+
+
+
+GO_enrich<-output1_GO_wildfire%>%
+  bind_rows(output1_GO_non_wildfire)
+saveRDS(GO_enrich,file="GO_enrichment_results.rds")
+
+
+KEEG_enrich<-output1_KEEG_wildfire%>%
+  bind_rows(output1_KEEG_non_wildfire)
+saveRDS(KEEG_enrich,file="KEEG_enrichment_results.rds")
+```
+
+
+
+## Process enrichment results
+```{r}
+GO_enrich<-readRDS("GO_enrichment_results.rds")
+KEEG_enrich<-readRDS("KEEG_enrichment_results.rds")
+
+sig_GO<-GO_enrich%>%
+  filter(DE>=3&P.DE<0.05)%>%#### significantly enriched pathway: al least three genes, and P-value for enrichment<0.05
+  group_by(exposure,SigGenesInSet)%>%
+  arrange(exposure,P.DE)
+xtabs(~exposure+ONTOLOGY,sig_GO)
+
+topGSA(filter(sig_GO,exposure=="Wildfire-related"),number = 10) 
+topGSA(filter(sig_GO,exposure=="Non-wildfire-related"),number = 10) 
+shared_GO<-intersect(filter(sig_GO,exposure=="Wildfire-related")$TERM,
+                          filter(sig_GO,exposure=="Non-wildfire-related")$TERM)## none
+
+
+
+
+
+sig_KEEG<-KEEG_enrich%>%
+  filter(DE>=3&P.DE<0.05)%>%#### significantly enriched pathway: al least three genes, and P-value for enrichment<0.05
+  group_by(exposure,SigGenesInSet)%>%
+  arrange(exposure,P.DE)
+topGSA(filter(sig_KEEG,exposure=="Wildfire-related"),number = 10) 
+topGSA(filter(sig_KEEG,exposure=="Non-wildfire-related"),number = 10) 
+  
+shared_KEEG<-intersect(filter(sig_KEEG,exposure=="Wildfire-related")$TERM,
+                          filter(sig_KEEG,exposure=="Non-wildfire-related")$TERM)## none
+
+```
+## Adapt simplify fuction from  Clusterprofiler package
+It is clear from above results that many GO terms actually contains the same gene set. This is becasue many GO terms have complicated parent-child relationships. Reporting all these GO terms would hinder effective intepretation. The gometh function in missMethyl has not address this problem. 
+
+However, the "clusterProfiler" R package provides a function called "simplify" to eliminate redundant GO terms (see Wu et al. The Innovation 2021;2:100141). This function employs GOSemSim package to calculate semantic similarities (an indicator betwen 0 and 1) among enriched GO terms using multiple methods based on information content or graph structure. For each group of GO terms that have high similarity between each other (similarity >0.7), the simplify function would only retain a repsentative term (e.g., the most significantly enriched term) while remove the others.
+
+see https://github.com/YuLab-SMU/clusterProfiler/commit/7e32c7d180ca928a22b58755d2949ad429c1e45f for the original "simplify" function
+```{r}
+library(clusterProfiler)
+library(GOSemSim)
+library(dplyr)
+x<-sig_GO%>%
+  mutate(exposure="Wildfire-related")%>%
+  filter(ONTOLOGY=="BP")## try one ontology as an example, because the original simplify function performs similarity calculation by ontology.
+
+## function for processing one specific ontology  
+simplify_one_on<-function(res=x, cutoff=0.7, by="P.DE", select_fun=min, measure="Wang",computeIC=FALSE) {
+              ## to satisfy codetools for calling gather
+              go1 <- go2 <- similarity <- NULL
+
+              sim <- mgoSim(res$ID, res$ID,
+                            semData = godata('org.Hs.eg.db', ont=unique(res$ONTOLOGY), computeIC=computeIC),
+                            measure=measure,
+                            combine=NULL)
+
+              sim.df <- as.data.frame(sim)
+              sim.df$go1 <- row.names(sim.df)
+              sim.df <- tidyr::gather(sim.df, go2, similarity, -go1)
+
+              sim.df <- sim.df[!is.na(sim.df$similarity),]
+
+              ## feature 'by' is attached to 'go1'
+              sim.df <- merge(sim.df, res[, c("ID", by)], by.x="go1", by.y="ID")
+              sim.df$go2 <- as.character(sim.df$go2)
+
+              ID <- res$ID
+
+              GO_to_remove <- character()
+  
+              for (i in seq_along(ID)) {
+                  ii <- which(sim.df$go2 == ID[i] & sim.df$similarity > cutoff)
+                  ## if length(ii) == 1, then go1 == go2
+                  if (length(ii) < 2) 
+                      next
+
+                  sim_subset <- sim.df[ii,]
+
+                  jj <- which(sim_subset[, by] == select_fun(sim_subset[, by]))
+                  
+                  if(length(jj)>1){## Some GO terms may have exact the same P-value, in this case, select the GO term with longer names
+                   s_jj<-which(nchar(res[res$ID%in%sim_subset$go1[jj],]$TERM)==max(nchar(res[res$ID%in%sim_subset$go1[jj],]$TERM)))
+                   jj<-jj[s_jj]
+                  }
+
+                  ## sim.df <- sim.df[-ii[-jj]]
+                  GO_to_remove <- c(GO_to_remove, sim_subset$go1[-jj]) %>% unique
+              }
+           
+              filter(res,!ID%in%GO_to_remove)
+              
+}
+
+
+
+x<-simplify_one_on(x,measure="Jiang",computeIC = T)
+## after try severl meaures, the "Jiang" looks like the best to remove redudant terms
+## "Wang" measure doen't work for BP terms(all similarity equal to 0)
+```
+## Simplfied GO enrichment results
+```{r}
+simple_GO_wildfire<-sig_GO%>%
+  filter(exposure=="Wildfire-related")%>%
+  split.data.frame(.$ONTOLOGY)%>%
+  lapply(function(a) simplify_one_on(a,cutoff=0.7, by="P.DE", select_fun=min, measure="Jiang",computeIC = T))%>%
+  bind_rows()
+
+simple_GO_non_wildfire<-sig_GO%>%
+  filter(exposure=="Non-wildfire-related")%>%
+  split.data.frame(.$ONTOLOGY)%>%
+  lapply(function(a) simplify_one_on(a,cutoff=0.7, by="P.DE", select_fun=min, measure="Jiang",computeIC = T))%>%
+  bind_rows()
+## Save results
+simple_GO_wildfire%>%
+  bind_rows(simple_GO_non_wildfire)%>%
+write.csv("GO_singnificant_enriched_pathways.csv")
+
+sig_KEEG%>%
+  write.csv("KEEG_singnificant_enriched_pathways.csv")
+
+
+```
+
+## try plot significant pathways
+```{r}
+library(ggplot2)
+library(ggsci)
+A<-simple_GO_wildfire%>%
+  mutate(y=-log10(P.DE))%>%
+  arrange(ONTOLOGY,y)%>%
+  mutate(TERM=factor(TERM,levels = .$TERM))%>%
+  ggplot(aes(x=TERM,y=y,fill=ONTOLOGY))+
+  scale_fill_lancet()+
+    geom_bar(stat="identity")+
+    coord_flip()+
+    labs(x="",y=expression(paste("-log"[10],"(P-value)",sep = "")),fill="GO ontology",
+         title = "A.Wildfire-related")+
+    theme_bw()
+A
+```
+
+```{r}
+B<-simple_GO_non_wildfire%>%
+  mutate(y=-log10(P.DE))%>%
+  arrange(ONTOLOGY,y)%>%
+  mutate(TERM=factor(TERM,levels = .$TERM))%>%
+  ggplot(aes(x=TERM,y=y,fill=ONTOLOGY))+
+  scale_fill_lancet()+
+    geom_bar(stat="identity")+
+    coord_flip()+
+    labs(x="",y=expression(paste("-log"[10],"(P-value)",sep = "")),fill="GO ontology",
+         title = "B.Non-wildfire-related")+
+    theme_bw()
+B
+
+## seem that it is better to display the results as table, rather as figures
+```
+
+
